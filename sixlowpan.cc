@@ -25,6 +25,31 @@ void UpdatePosition(Ptr<Node> node, double startX, double startY, double endX, d
     });
 }
 
+void CollectSignalData(Ptr<Node> node, Ptr<Node> ap, Ptr<PropagationLossModel> lossModel) {
+    double distance = node->GetObject<MobilityModel>()->GetDistanceFrom(ap->GetObject<MobilityModel>());
+
+    // Potência do transmissor (Tx Power) para 802.15.4 (pode variar entre -10 a 0 dBm)
+    double txPower = 0.0;
+
+    // Calculando potência do sinal recebido (Rx Power)
+    double rxPower = lossModel->CalcRxPower(txPower, node->GetObject<MobilityModel>(), ap->GetObject<MobilityModel>());
+
+    // Definição do ruído térmico para 802.15.4 (típico: -101 dBm)
+    double noisePower = -101.0;
+
+    // Calculando SNR corretamente
+    double snr = rxPower - noisePower;
+
+    std::cout << "[📡 Sinal] Tempo: " << Simulator::Now().GetSeconds()
+              << "s | Distância: " << distance
+              << "m | Rx Power: " << rxPower << " dBm | SNR: " << snr << " dB" << std::endl;
+
+    // Agendar próxima coleta de dados (enquanto a simulação estiver rodando)
+    if (Simulator::Now().GetSeconds() < 60) {
+        Simulator::Schedule(Seconds(1.0), &CollectSignalData, node, ap, lossModel);
+    }
+}
+
 int main(int argc, char** argv) {
 
     bool verbose = false;
@@ -81,18 +106,25 @@ int main(int argc, char** argv) {
     mob2->SetPosition(Vector(0.0, 5.0, 0.0));
     UpdatePosition(client2, 0.0, 5.0, 0.0, 100.0, 58.0);
 
-    // Helper do LrWpan.
+    // Criar modelo de propagação manualmente
+    Ptr<LogDistancePropagationLossModel> logDistanceModel = CreateObject<LogDistancePropagationLossModel>();
+    logDistanceModel->SetAttribute("Exponent", DoubleValue(4.5));
+
+    // Criar modelo de Nakagami manualmente
+    Ptr<NakagamiPropagationLossModel> nakagamiModel = CreateObject<NakagamiPropagationLossModel>();
+    nakagamiModel->SetAttribute("m0", DoubleValue(0.8));
+    nakagamiModel->SetAttribute("m1", DoubleValue(0.5));
+    nakagamiModel->SetAttribute("m2", DoubleValue(0.2));
+
+    // Conectar modelos de propagação
+    logDistanceModel->SetNext(nakagamiModel);
+
+    // Adicionar modelos de propagação ao helper
     LrWpanHelper lrWpanHelper;
+    lrWpanHelper.AddPropagationLossModel("ns3::LogDistancePropagationLossModel", "Exponent", DoubleValue(4.5));
+    lrWpanHelper.AddPropagationLossModel("ns3::NakagamiPropagationLossModel", "m0", DoubleValue(0.8), "m1", DoubleValue(0.5), "m2", DoubleValue(0.2));
 
-    // Adiciona modelo de propagação logarítmica (distância impacta diretamente a potência)
-    lrWpanHelper.AddPropagationLossModel("ns3::LogDistancePropagationLossModel",
-                                         "Exponent", DoubleValue(4.5));
-
-    lrWpanHelper.AddPropagationLossModel("ns3::NakagamiPropagationLossModel",
-                                         "m0", DoubleValue(0.8),
-                                         "m1", DoubleValue(0.5),
-                                         "m2", DoubleValue(0.2));
-
+    // Instalar os dispositivos LR-WPAN nos nós
     NetDeviceContainer lrwpanDevices = lrWpanHelper.Install(nodes);
 
     // PAN association manual.
@@ -121,8 +153,8 @@ int main(int argc, char** argv) {
     std::cout << "Total de dispositivos: " << devices.GetN() << std::endl;
 
     // Pings
-    uint32_t packetSize = 32; // Tamanho dos pacotes.
-    uint32_t maxPacketCount = 100; // Quantidade de pacotes.
+    uint32_t packetSize = 128; // Tamanho dos pacotes.
+    uint32_t maxPacketCount = 512; // Quantidade de pacotes.
     Time interPacketInterval = Seconds(0.1);
 
     // Enviar pacotes para o Nó 1
@@ -172,6 +204,11 @@ int main(int argc, char** argv) {
 
     // Configuração do Simulador.
     Simulator::Stop(Seconds(60));
+
+    // Iniciar coleta de sinal para ambos os clientes
+    Simulator::Schedule(Seconds(1.0), &CollectSignalData, client1, ap, logDistanceModel);
+    Simulator::Schedule(Seconds(1.0), &CollectSignalData, client2, ap, logDistanceModel);
+
     Simulator::Run();
     Simulator::Destroy();
     return 0;
