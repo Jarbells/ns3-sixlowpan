@@ -18,13 +18,38 @@ void UpdatePosition(Ptr<Node> node, double startX, double startY, double endX, d
     double velocityY = (endY - startY) / duration;
     mob->SetVelocity(Vector(velocityX, velocityY, 0.0));
 
-    Simulator::Schedule(Seconds(duration), [mob, velocityX, velocityY]() {
-        std::cout << "[INFO] Invertendo direção do nó móvel!" << std::endl;
-        mob->SetVelocity(Vector(-velocityX, -velocityY, 0.0)); // Inverte direção após "duration"
+    // Quando atingir o destino, o nó PARA.
+    Simulator::Schedule(Seconds(duration), [mob]() {
+        std::cout << "[INFO] Nó chegou ao destino e parou!" << std::endl;
+        mob->SetVelocity(Vector(0.0, 0.0, 0.0)); // Faz o nó PARAR no destino.
     });
 }
 
 int main(int argc, char** argv) {
+
+    bool verbose = false;
+    bool disablePcap = false;
+    bool disableAsciiTrace = false;
+    bool enableLSixlowLogLevelInfo = false;
+
+    CommandLine cmd(__FILE__);
+    cmd.AddValue("verbose", "turn on log components", verbose);
+    cmd.AddValue("disable-pcap", "disable PCAP generation", disablePcap);
+    cmd.AddValue("disable-asciitrace", "disable ascii trace generation", disableAsciiTrace);
+    cmd.AddValue("enable-sixlowpan-loginfo",
+                 "enable sixlowpan LOG_LEVEL_INFO (used for tests)",
+                 enableLSixlowLogLevelInfo);
+    cmd.Parse(argc, argv);
+
+    if (verbose)
+    {
+        LogComponentEnable("Ping", LOG_LEVEL_ALL);
+        LogComponentEnable("LrWpanMac", LOG_LEVEL_ALL);
+        LogComponentEnable("LrWpanPhy", LOG_LEVEL_ALL);
+        LogComponentEnable("LrWpanNetDevice", LOG_LEVEL_ALL);
+        LogComponentEnable("SixLowPanNetDevice", LOG_LEVEL_ALL);
+    }
+
     // Crio 3 nodes e ponteiros para mais controle sobre cada nó individualmente.
     Ptr<Node> ap = CreateObject<Node>();
     Ptr<Node> client1 = CreateObject<Node>();
@@ -46,7 +71,7 @@ int main(int argc, char** argv) {
     mobility_client1.Install(client1);
     Ptr<ConstantVelocityMobilityModel> mob1 = client1->GetObject<ConstantVelocityMobilityModel>();
     mob1->SetPosition(Vector(5.0, 0.0, 0.0));
-    UpdatePosition(client1, 5.0, 0.0, 100.0, 0.0, 30.0);
+    UpdatePosition(client1, 5.0, 0.0, 100.0, 0.0, 58.0);
 
     // Mobilidade do Cliente 2.
     MobilityHelper mobility_client2;
@@ -54,7 +79,86 @@ int main(int argc, char** argv) {
     mobility_client2.Install(client2);
     Ptr<ConstantVelocityMobilityModel> mob2 = client2->GetObject<ConstantVelocityMobilityModel>();
     mob2->SetPosition(Vector(0.0, 5.0, 0.0));
-    UpdatePosition(client2, 0.0, 5.0, 0.0, 100.0, 30.0);
+    UpdatePosition(client2, 0.0, 5.0, 0.0, 100.0, 58.0);
+
+    // Helper do LrWpan.
+    LrWpanHelper lrWpanHelper;
+
+    // Adiciona modelo de propagação logarítmica (distância impacta diretamente a potência)
+    lrWpanHelper.AddPropagationLossModel("ns3::LogDistancePropagationLossModel",
+                                         "Exponent", DoubleValue(4.5));
+
+    lrWpanHelper.AddPropagationLossModel("ns3::NakagamiPropagationLossModel",
+                                         "m0", DoubleValue(0.8),
+                                         "m1", DoubleValue(0.5),
+                                         "m2", DoubleValue(0.2));
+
+    NetDeviceContainer lrwpanDevices = lrWpanHelper.Install(nodes);
+
+    // PAN association manual.
+    lrWpanHelper.CreateAssociatedPan(lrwpanDevices, 1);
+
+    // Pilha IPv6.
+    InternetStackHelper internetv6;
+    internetv6.Install(nodes);
+
+    // Sixlowpan.
+    SixLowPanHelper sixlowpan;
+    NetDeviceContainer devices = sixlowpan.Install(lrwpanDevices);
+
+    // Aplicando IPv6 aos dispositivos.
+    Ipv6AddressHelper ipv6;
+    ipv6.SetBase(Ipv6Address("2001:2::"), Ipv6Prefix(64));
+    Ipv6InterfaceContainer deviceInterfaces;
+    deviceInterfaces = ipv6.Assign(devices);
+
+    for (uint32_t i = 0; i < devices.GetN(); i++) {
+        std::cout << "Device " << i << ": pseudo-Mac-48 "
+                  << Mac48Address::ConvertFrom(devices.Get(i)->GetAddress())
+                  << ", IPv6 Address " << deviceInterfaces.GetAddress(i, 1)
+                  << std::endl;
+    }
+    std::cout << "Total de dispositivos: " << devices.GetN() << std::endl;
+
+    // Pings
+    uint32_t packetSize = 32; // Tamanho dos pacotes.
+    uint32_t maxPacketCount = 100; // Quantidade de pacotes.
+    Time interPacketInterval = Seconds(0.1);
+
+    // Enviar pacotes para o Nó 1
+    PingHelper ping1(deviceInterfaces.GetAddress(1, 1));
+    ping1.SetAttribute("Count", UintegerValue(maxPacketCount));
+    ping1.SetAttribute("Interval", TimeValue(interPacketInterval));
+    ping1.SetAttribute("Size", UintegerValue(packetSize));
+    ApplicationContainer apps1 = ping1.Install(nodes.Get(0));
+
+    // Enviar pacotes para o Nó 2
+    PingHelper ping2(deviceInterfaces.GetAddress(2, 1));  // Agora para o Nó 2
+    ping2.SetAttribute("Count", UintegerValue(maxPacketCount));
+    ping2.SetAttribute("Interval", TimeValue(interPacketInterval));
+    ping2.SetAttribute("Size", UintegerValue(packetSize));
+    ApplicationContainer apps2 = ping2.Install(nodes.Get(0));
+
+    // Iniciar e parar os aplicativos no mesmo período
+    apps1.Start(Seconds(2));
+    apps1.Stop(Seconds(60));
+
+    apps2.Start(Seconds(2));
+    apps2.Stop(Seconds(60));
+
+    if (!disableAsciiTrace) {
+        AsciiTraceHelper ascii;
+        lrWpanHelper.EnableAsciiAll(ascii.CreateFileStream("Ping-6LoW-lr-wpan.tr"));
+    }
+
+    if (!disablePcap) {
+        lrWpanHelper.EnablePcapAll(std::string("Ping-6LoW-lr-wpan"), true);
+    }
+
+    if (enableLSixlowLogLevelInfo) {
+        Ptr<OutputStreamWrapper> routingStream = Create<OutputStreamWrapper>(&std::cout);
+        Ipv6RoutingHelper::PrintNeighborCacheAllAt(Seconds(9), routingStream);
+    }
 
     // Configuração do NetAnim.
     AnimationInterface anim("sixlowpan-animation.xml");
