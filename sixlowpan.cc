@@ -40,7 +40,7 @@ void CollectSignalData(Ptr<Node> node, Ptr<Node> ap, Ptr<PropagationLossModel> l
     // Calculando SNR corretamente
     double snr = rxPower - noisePower;
 
-    std::cout << "[📡 Sinal] Tempo: " << Simulator::Now().GetSeconds()
+    std::cout << "[Sinal] Tempo: " << Simulator::Now().GetSeconds()
               << "s | Distância: " << distance
               << "m | Rx Power: " << rxPower << " dBm | SNR: " << snr << " dB" << std::endl;
 
@@ -106,29 +106,29 @@ int main(int argc, char** argv) {
     mob2->SetPosition(Vector(0.0, 5.0, 0.0));
     UpdatePosition(client2, 0.0, 5.0, 0.0, 100.0, 58.0);
 
-    // Criar modelo de propagação manualmente
+    // Criar modelo de propagação manualmente.
     Ptr<LogDistancePropagationLossModel> logDistanceModel = CreateObject<LogDistancePropagationLossModel>();
     logDistanceModel->SetAttribute("Exponent", DoubleValue(4.5));
 
-    // Criar modelo de Nakagami manualmente
+    // Criar modelo de Nakagami manualmente.
     Ptr<NakagamiPropagationLossModel> nakagamiModel = CreateObject<NakagamiPropagationLossModel>();
     nakagamiModel->SetAttribute("m0", DoubleValue(0.8));
     nakagamiModel->SetAttribute("m1", DoubleValue(0.5));
     nakagamiModel->SetAttribute("m2", DoubleValue(0.2));
 
-    // Conectar modelos de propagação
+    // Conectar modelos de propagação.
     logDistanceModel->SetNext(nakagamiModel);
 
-    // Adicionar modelos de propagação ao helper
+    // Adicionar modelos de propagação ao helper.
     LrWpanHelper lrWpanHelper;
     lrWpanHelper.AddPropagationLossModel("ns3::LogDistancePropagationLossModel", "Exponent", DoubleValue(4.5));
     lrWpanHelper.AddPropagationLossModel("ns3::NakagamiPropagationLossModel", "m0", DoubleValue(0.8), "m1", DoubleValue(0.5), "m2", DoubleValue(0.2));
 
-    // Instalar os dispositivos LR-WPAN nos nós
+    // Instalar os dispositivos LR-WPAN nos nós.
     NetDeviceContainer lrwpanDevices = lrWpanHelper.Install(nodes);
 
     // PAN association manual.
-    lrWpanHelper.CreateAssociatedPan(lrwpanDevices, 1);
+    lrWpanHelper.CreateAssociatedPan(lrwpanDevices, 0);
 
     // Pilha IPv6.
     InternetStackHelper internetv6;
@@ -153,8 +153,8 @@ int main(int argc, char** argv) {
     std::cout << "Total de dispositivos: " << devices.GetN() << std::endl;
 
     // Pings
-    uint32_t packetSize = 128; // Tamanho dos pacotes.
-    uint32_t maxPacketCount = 512; // Quantidade de pacotes.
+    uint32_t packetSize = 32; // Tamanho dos pacotes.
+    uint32_t maxPacketCount = 100; // Quantidade de pacotes.
     Time interPacketInterval = Seconds(0.1);
 
     // Enviar pacotes para o Nó 1
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
     // Configuração do Simulador.
     Simulator::Stop(Seconds(60));
 
-    // Iniciar coleta de sinal para ambos os clientes
+    // Iniciar coleta de sinal para ambos os clientes.
     Simulator::Schedule(Seconds(1.0), &CollectSignalData, client1, ap, logDistanceModel);
     Simulator::Schedule(Seconds(1.0), &CollectSignalData, client2, ap, logDistanceModel);
 
